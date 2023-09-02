@@ -1,39 +1,78 @@
-﻿#!/bin/bash
+#!/bin/bash
 
-# Обновляем систему
-sudo apt update && sudo apt upgrade -y
+apt-get update -y
+apt-get install unzip git sox gnupg2 curl libncurses5-dev subversion libsqlite3-dev build-essential libjansson-dev libxml2-dev uuid-dev -y
 
-# Устанавливаем зависимости
-sudo apt install -y wget build-essential git subversion linux-headers-$(uname -r) libxml2-dev libncurses5-dev uuid-dev sqlite3 libsqlite3-dev pkg-config libjansson-dev libxml2-dev sqlite autoconf automake libtool libedit-dev libssl-dev libcurl4-openssl-dev libncurses5-dev libnewt-dev libusb-dev libspandsp-dev libmyodbc odbc-postgresql unixodbc unixodbc-dev libsrtp2-dev libogg-dev libvorbis-dev libicu-dev libiksemel-dev libpq-dev libneon27-dev libbluetooth-dev libspeex-dev libspeexdsp-dev libmysqlclient-dev libradiusclient-ng-dev libsnmp-dev libxslt1-dev liburiparser-dev liblua5.1-0-dev libedit-dev libeditline-dev liblua50-dev liblua50 lua50 liblua5.2-dev liblua5.2 lua5.2 liblua5.3-dev liblua5.3 lua5.3 liblua5.4-dev liblua5.4 lua5.4 -y
+wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-19-current.tar.gz
+tar -xvzf asterisk-19-current.tar.gz
+cd asterisk-19.7.0
+contrib/scripts/get_mp3_source.sh
+contrib/scripts/install_prereq install
 
-# Устанавливаем Asterisk
-cd /usr/src/
-sudo wget http://downloads.asterisk.org/pub/telephony/asterisk/asterisk-18-current.tar.gz
-sudo tar xvfz asterisk-18-current.tar.gz
-cd asterisk-18*/
-sudo contrib/scripts/get_mp3_source.sh
-sudo contrib/scripts/install_prereq install
-sudo ./configure --libdir=/usr/lib64 --with-jansson-bundled
-sudo make
-sudo make install
-sudo make samples
-sudo make config
+./configure
+make menuselect.makeopts
+make -j$(nproc)
+make install
+make samples
+make config
+ldconfig
 
-# Устанавливаем FreePBX
-cd /usr/src/
-sudo wget http://mirror.freepbx.org/modules/packages/freepbx/freepbx-15.0-latest.tgz
-sudo tar xfz freepbx-15.0-latest.tgz
+groupadd asterisk
+useradd -r -d /var/lib/asterisk -g asterisk asterisk
+usermod -aG audio,dialout asterisk
+
+chown -R asterisk.asterisk /etc/asterisk
+chown -R asterisk.asterisk /var/{lib,log,spool}/asterisk
+chown -R asterisk.asterisk /usr/lib/asterisk
+
+echo 'AST_USER="asterisk"' > /etc/default/asterisk
+echo 'AST_GROUP="asterisk"' >> /etc/default/asterisk
+
+echo '[Unit]
+Description=Asterisk PBX and telephony daemon
+After=network.target
+Documentation=man:asterisk(8)
+Wants=network-online.target
+Wants=systemd-networkd-wait-online.service
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/asterisk -g -f -U asterisk -G asterisk
+ExecStop=/usr/sbin/asterisk -rx "core stop now"
+ExecReload=/usr/sbin/asterisk -rx "core reload"
+Restart=always
+RestartSec=5
+User=asterisk
+Group=asterisk
+
+[Install]
+WantedBy=multi-user.target' > /etc/systemd/system/asterisk.service
+
+systemctl daemon-reload
+systemctl start asterisk
+systemctl enable asterisk
+systemctl status asterisk
+
+sed -i 's/;[radius]/[radius]/g' /etc/asterisk/cdr.conf
+sed -i 's#;radiuscfg => /usr/local/etc/radiusclient-ng/radiusclient.conf#radiuscfg => /etc/radcli/radiusclient.conf#g' /etc/asterisk/cdr.conf
+sed -i 's#;radiuscfg => /usr/local/etc/radiusclient-ng/radiusclient.conf#radiuscfg => /etc/radcli/radiusclient.conf#g' /etc/asterisk/cel.conf
+
+apt-get install -y apache2 mariadb-server libapache2-mod-php php php-pear php-cgi php-common php-curl php-mbstring php-gd php-mysql php-bcmath php-zip php-xml php-imap php-json php-snmp
+
+wget http://mirror.freepbx.org/modules/packages/freepbx/freepbx-16.0-latest.tgz
+tar -xvzf freepbx-16.0-latest.tgz
 cd freepbx
-sudo ./start_asterisk start
-sudo ./install -n
+apt-get install -y nodejs npm
 
-# Запускаем Asterisk и FreePBX
-sudo systemctl enable asterisk
-sudo systemctl start asterisk
-sudo fwconsole start
+./install -n
 
-# Завершение установки
-sudo fwconsole chown
-sudo fwconsole reload
+fwconsole ma install pm2
 
-echo "Установка Asterisk и FreePBX завершена."
+sed -i 's/^\(User\|Group\).*/\1 asterisk/' /etc/apache2/apache2.conf
+sed -i 's/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
+
+sed -i 's/^\(upload_max_filesize = \).*/\120M/' /etc/php/7.4/apache2/php.ini
+sed -i 's/^\(upload_max_filesize = \).*/\120M/' /etc/php/7.4/cli/php.ini
+
+a2enmod rewrite
+systemctl restart apache2
